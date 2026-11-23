@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-ViciCat - Automated application & game categorization for Vicinae using Local & Cloud LLMs
-"""
+"""Catty - Unified application & game categorizer for Walker, Vicinae, and Spot."""
 
 import argparse
 import hashlib
@@ -12,18 +10,19 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional
 
-from categorizer import AppCategorizer
-from config import (
+from .backends import resolve_targets
+from .backends.spot import SpotBackend
+from .categorizer import AppCategorizer
+from .config import (
     DEFAULT_CATEGORIES,
+    DEFAULT_TARGET,
     PROVIDER,
     REVERSE_CATEGORY_MAPPING,
     STATE_FILE,
-    VICINAE_EXT_DIR,
     XDG_CONFIG_HOME,
 )
-from menu_generator import MenuGenerator
-from parser import DesktopEntry, DesktopFileParser
-from writer import DesktopFileWriter
+from .parser import DesktopEntry, DesktopFileParser
+from .writer import DesktopFileWriter
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -125,11 +124,15 @@ def cmd_categorize(args) -> int:
 
 
 def cmd_menus(args) -> int:
-    gen = MenuGenerator()
+    backends = resolve_targets(args.target)
     if args.clean:
-        gen.cleanup(restart=not args.no_restart)
-        print("Removed ViciCat extension and favorites from Vicinae.")
-        return 0
+        ok = True
+        for backend in backends:
+            if not backend.cleanup(restart=not args.no_restart):
+                ok = False
+            elif not args.quiet:
+                print(f"Cleaned generated menus for {backend.name}.")
+        return 0 if ok else 1
 
     parser = DesktopFileParser()
     entries = parser.scan_all()
@@ -144,28 +147,31 @@ def cmd_menus(args) -> int:
             uncategorized_count += 1
 
     if not categorized:
-        logger.error("No categorized applications found. Run 'vicicat categorize --yes' first.")
+        logger.error("No categorized applications found. Run 'catty categorize --yes' first.")
         return 1
 
     if uncategorized_count > 0 and not args.quiet:
         logger.info(
-            f"{uncategorized_count} uncategorized app(s) skipped (run 'vicicat categorize -y' to classify)."
+            f"{uncategorized_count} uncategorized app(s) skipped (run 'catty categorize -y' to classify)."
         )
 
-    if gen.generate(
-        categorized,
-        entries,
-        dry_run=args.dry_run,
-        restart=not args.no_restart and not args.dry_run,
-    ):
-        if not args.quiet and not args.dry_run:
-            print(f"Generated Vicinae extension at {VICINAE_EXT_DIR}")
-        return 0
-    return 1
+    ok = True
+    for backend in backends:
+        if not backend.generate(
+            categorized,
+            entries,
+            dry_run=args.dry_run,
+            restart=not args.no_restart and not args.dry_run,
+        ):
+            ok = False
+        elif not args.quiet and not args.dry_run:
+            print(f"Generated {backend.name} category menus.")
+    return 0 if ok else 1
 
 
 def cmd_auto(args) -> int:
     """Automated non-interactive categorize + menu sync with loop guard."""
+    backends = resolve_targets(args.target)
     parser = DesktopFileParser()
     entries = parser.scan_all()
     fp = _compute_fingerprint(entries)
@@ -177,7 +183,11 @@ def cmd_auto(args) -> int:
         except Exception:
             state = {}
 
-    if not args.force and state.get("fingerprint") == fp and (VICINAE_EXT_DIR / "package.json").exists():
+    if (
+        not args.force
+        and state.get("fingerprint") == fp
+        and all(b.output_exists() for b in backends)
+    ):
         return 0
 
     uncategorized = {f: e for f, e in entries.items() if not _map_desktop_category(e)}
@@ -193,55 +203,55 @@ def cmd_auto(args) -> int:
         except Exception as e:
             logger.warning(f"Auto-categorization skipped ({e}); syncing existing categories.")
 
-    # Save fingerprint before restarting/finishing so path watcher does not loop
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps({"fingerprint": fp}), encoding="utf-8")
 
     categorized = {
-        f: _map_desktop_category(e) for f, e in entries.items() if _map_desktop_category(e)
+        f: cat for f, e in entries.items() if (cat := _map_desktop_category(e)) is not None
     }
     if categorized:
-        gen = MenuGenerator()
-        gen.generate(categorized, entries, dry_run=False, restart=True)
+        for backend in backends:
+            backend.generate(categorized, entries, dry_run=False, restart=True)
     return 0
 
 
 def cmd_service(args) -> int:
     systemd_dir = XDG_CONFIG_HOME / "systemd/user"
     systemd_dir.mkdir(parents=True, exist_ok=True)
-    repo_dir = Path(__file__).resolve().parent
-    vicicat_bin = repo_dir / "vicicat"
+    repo_dir = Path(__file__).resolve().parents[2]
+    catty_bin = repo_dir / "catty"
+    exec_bin = str(catty_bin) if catty_bin.exists() else "catty"
 
     units = {
-        "vicicat-watcher.path": f"""[Unit]
-Description=Watch application directories for new games/apps (ViciCat)
+        "catty-watcher.path": """[Unit]
+Description=Watch application directories for new games/apps (Catty)
 
 [Path]
 PathChanged=/usr/share/applications
 PathChanged=%h/.local/share/applications
-Unit=vicicat-sync.service
+Unit=catty-sync.service
 
 [Install]
 WantedBy=default.target
 """,
-        "vicicat-sync.timer": f"""[Unit]
-Description=Periodic ViciCat category & usage sync timer
+        "catty-sync.timer": """[Unit]
+Description=Periodic Catty category & usage sync timer
 
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=30min
 Persistent=true
-Unit=vicicat-sync.service
+Unit=catty-sync.service
 
 [Install]
 WantedBy=timers.target
 """,
-        "vicicat-sync.service": f"""[Unit]
-Description=ViciCat automatic app categorizer and Vicinae group generator
+        "catty-sync.service": f"""[Unit]
+Description=Catty automatic app categorizer and launcher menu generator
 
 [Service]
 Type=oneshot
-ExecStart={vicicat_bin} auto
+ExecStart={exec_bin} auto --target {args.target}
 """,
     }
 
@@ -250,24 +260,24 @@ ExecStart={vicicat_bin} auto
             (systemd_dir / name).write_text(content, encoding="utf-8")
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
         subprocess.run(
-            ["systemctl", "--user", "enable", "--now", "vicicat-watcher.path", "vicicat-sync.timer"],
+            ["systemctl", "--user", "enable", "--now", "catty-watcher.path", "catty-sync.timer"],
             check=True,
         )
-        print("Installed and enabled vicicat-watcher.path and vicicat-sync.timer.")
+        print("Installed and enabled catty-watcher.path and catty-sync.timer.")
         return 0
-    elif args.action == "uninstall":
+    if args.action == "uninstall":
         subprocess.run(
-            ["systemctl", "--user", "disable", "--now", "vicicat-watcher.path", "vicicat-sync.timer"],
+            ["systemctl", "--user", "disable", "--now", "catty-watcher.path", "catty-sync.timer"],
             check=False,
         )
-        print("Disabled vicicat systemd units.")
+        print("Disabled catty systemd units.")
         return 0
-    else:
-        subprocess.run(
-            ["systemctl", "--user", "status", "vicicat-watcher.path", "vicicat-sync.timer", "--no-pager"],
-            check=False,
-        )
-        return 0
+
+    subprocess.run(
+        ["systemctl", "--user", "status", "catty-watcher.path", "catty-sync.timer", "--no-pager"],
+        check=False,
+    )
+    return 0
 
 
 def cmd_rollback(args) -> int:
@@ -285,9 +295,25 @@ def cmd_categories(_args) -> int:
     return 0
 
 
-def main() -> int:
+def cmd_spot_query(args) -> int:
+    rows = SpotBackend().query_rows(" ".join(args.query))
+    for row in rows:
+        print(row)
+    return 0
+
+
+def cmd_spot_launch(args) -> int:
+    return SpotBackend().launch_selection(" ".join(args.app))
+
+
+def cmd_spot_open(args) -> int:
+    return SpotBackend().open_category(" ".join(args.category))
+
+
+def main(default_target: Optional[str] = None) -> int:
+    target_default = default_target or DEFAULT_TARGET
     parser = argparse.ArgumentParser(
-        description="ViciCat - Automated app & game groups for Vicinae with Local/Cloud LLM"
+        description="Catty - Unified app & game categorizer for Walker, Vicinae, and Spot"
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -306,25 +332,43 @@ def main() -> int:
     p_cat.add_argument("--model", type=str, default=None)
     p_cat.add_argument("--local-url", type=str, default="http://127.0.0.1:11434")
 
-    p_menu = sub.add_parser("menus", help="Generate native Vicinae category extension")
+    p_menu = sub.add_parser("menus", help="Generate launcher category menus/extensions")
+    p_menu.add_argument(
+        "-t", "--target", choices=["auto", "spot", "vicinae", "walker", "all"], default=target_default
+    )
     p_menu.add_argument("--dry-run", action="store_true")
     p_menu.add_argument("--clean", action="store_true")
     p_menu.add_argument("-q", "--quiet", action="store_true")
     p_menu.add_argument("--no-restart", action="store_true")
 
     p_auto = sub.add_parser("auto", help="Non-interactive categorize + menu sync")
+    p_auto.add_argument(
+        "-t", "--target", choices=["auto", "spot", "vicinae", "walker", "all"], default=target_default
+    )
     p_auto.add_argument("-f", "--force", action="store_true")
     p_auto.add_argument("--provider", choices=["auto", "local", "cloud"], default=PROVIDER)
     p_auto.add_argument("--model", type=str, default=None)
 
     p_svc = sub.add_parser("service", help="Manage systemd user watcher & timer")
     p_svc.add_argument("action", choices=["install", "uninstall", "status"], default="status", nargs="?")
+    p_svc.add_argument(
+        "-t", "--target", choices=["auto", "spot", "vicinae", "walker", "all"], default=target_default
+    )
 
     p_rb = sub.add_parser("rollback", help="Rollback .desktop file changes")
     p_rb.add_argument("-l", "--list", action="store_true")
     p_rb.add_argument("-t", "--timestamp", type=str)
 
     sub.add_parser("categories", help="List supported categories")
+
+    p_sq = sub.add_parser("spot-query", help=argparse.SUPPRESS)
+    p_sq.add_argument("query", nargs="*")
+
+    p_sl = sub.add_parser("spot-launch", help=argparse.SUPPRESS)
+    p_sl.add_argument("app", nargs="+")
+
+    p_so = sub.add_parser("spot-open", help=argparse.SUPPRESS)
+    p_so.add_argument("category", nargs="+")
 
     args = parser.parse_args()
     if not args.command:
@@ -339,8 +383,23 @@ def main() -> int:
         "service": cmd_service,
         "rollback": cmd_rollback,
         "categories": cmd_categories,
+        "spot-query": cmd_spot_query,
+        "spot-launch": cmd_spot_launch,
+        "spot-open": cmd_spot_open,
     }
     return dispatch[args.command](args)
+
+
+def main_walker() -> int:
+    return main(default_target="walker")
+
+
+def main_vicinae() -> int:
+    return main(default_target="vicinae")
+
+
+def main_spot() -> int:
+    return main(default_target="spot")
 
 
 if __name__ == "__main__":

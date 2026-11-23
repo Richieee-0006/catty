@@ -1,25 +1,34 @@
+"""Safely writes updated Categories= into ~/.local/share/applications with backups."""
+
 import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from config import BACKUP_DIR, CATEGORY_MAPPINGS, USER_APPS_DIR
-from parser import DesktopEntry
+from .config import BACKUP_DIR, CATEGORY_MAPPINGS, USER_APPS_DIR
+from .parser import DesktopEntry
 
 logger = logging.getLogger(__name__)
 
 
 class DesktopFileWriter:
-    """Safely writes .desktop files to user directory with backups."""
+    """Safely writes .desktop files to user directory with timestamped backups."""
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(
+        self,
+        dry_run: bool = False,
+        user_apps_dir: Path = USER_APPS_DIR,
+        backup_dir: Path = BACKUP_DIR,
+    ):
         self.dry_run = dry_run
+        self.user_apps_dir = user_apps_dir
+        self.backup_dir = backup_dir
         self.backup_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.modified_files: List[str] = []
 
     def _get_backup_path(self, filename: str) -> Path:
-        backup_subdir = BACKUP_DIR / self.backup_timestamp
+        backup_subdir = self.backup_dir / self.backup_timestamp
         backup_subdir.mkdir(parents=True, exist_ok=True)
         return backup_subdir / filename
 
@@ -32,7 +41,8 @@ class DesktopFileWriter:
             return False
 
     def _ensure_user_copy(self, entry: DesktopEntry) -> Path:
-        user_file = USER_APPS_DIR / entry.filename
+        self.user_apps_dir.mkdir(parents=True, exist_ok=True)
+        user_file = self.user_apps_dir / entry.filename
         if user_file.exists():
             return user_file
         if entry.filepath.exists():
@@ -125,9 +135,9 @@ class DesktopFileWriter:
     def rollback(self, backup_timestamp: Optional[str] = None) -> bool:
         try:
             if backup_timestamp:
-                backup_dir = BACKUP_DIR / backup_timestamp
+                backup_dir = self.backup_dir / backup_timestamp
             else:
-                backups = sorted(BACKUP_DIR.glob("*"), reverse=True)
+                backups = sorted(self.backup_dir.glob("*"), reverse=True)
                 if not backups:
                     logger.error("No backups found")
                     return False
@@ -137,9 +147,10 @@ class DesktopFileWriter:
                 logger.error(f"Backup not found: {backup_dir}")
                 return False
 
+            self.user_apps_dir.mkdir(parents=True, exist_ok=True)
             restored = 0
             for backup_file in backup_dir.glob("*.desktop"):
-                shutil.copy2(backup_file, USER_APPS_DIR / backup_file.name)
+                shutil.copy2(backup_file, self.user_apps_dir / backup_file.name)
                 restored += 1
 
             logger.info(f"Restored {restored} files from {backup_dir.name}")
@@ -149,5 +160,7 @@ class DesktopFileWriter:
             return False
 
     def list_backups(self) -> List[str]:
-        backups = sorted(BACKUP_DIR.glob("*"), reverse=True)
+        if not self.backup_dir.exists():
+            return []
+        backups = sorted(self.backup_dir.glob("*"), reverse=True)
         return [b.name for b in backups if b.is_dir()]

@@ -1,3 +1,5 @@
+"""LLM categorizer supporting local Ollama/OpenAI-compatible and Gemini Cloud APIs."""
+
 import json
 import logging
 import re
@@ -6,7 +8,7 @@ from typing import Dict, Optional
 
 import requests
 
-from config import (
+from .config import (
     CATEGORIZATION_PROMPT,
     CLOUD_MODEL,
     DEFAULT_CATEGORIES,
@@ -18,7 +20,7 @@ from config import (
     PROVIDER,
     TIMEOUT,
 )
-from parser import DesktopEntry
+from .parser import DesktopEntry
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ class AppCategorizer:
         model: Optional[str] = None,
         api_key: str = GEMINI_API_KEY,
         local_url: str = LOCAL_API_URL,
+        auto_detect: bool = True,
     ):
         self.provider = provider.lower()
         self.custom_model = model
@@ -39,7 +42,8 @@ class AppCategorizer:
         self.local_url = local_url.rstrip("/")
         self.active_backend: Optional[str] = None
         self.active_model: Optional[str] = None
-        self._resolve_backend()
+        if auto_detect:
+            self._resolve_backend()
 
     def _resolve_backend(self) -> None:
         if self.provider in ("auto", "local"):
@@ -77,7 +81,6 @@ class AppCategorizer:
                 target = self.custom_model or LOCAL_MODEL
                 if target in models:
                     return ("ollama", target)
-                # Prefix match (e.g. gemma4) or first available non-embedding model
                 for m in models:
                     if m.startswith(target.split(":")[0]):
                         return ("ollama", m)
@@ -94,7 +97,7 @@ class AppCategorizer:
                     self.local_url = base_url
                     data = resp.json().get("data", [])
                     models = [m.get("id", "") for m in data if m.get("id")]
-                    target = self.custom_model or "coder-pro"
+                    target = self.custom_model or "coder-max-mtp"
                     if target in models:
                         return ("openai", target)
                     if models:
@@ -172,13 +175,11 @@ class AppCategorizer:
     def _parse_response(self, response_text: str) -> Optional[Dict[str, str]]:
         try:
             text = response_text.strip()
-            # Strip <think>...</think> blocks if present from reasoning models
             text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
             if text.startswith("```"):
                 text = re.sub(r"^```(?:json)?\s*", "", text)
                 text = re.sub(r"\s*```$", "", text)
 
-            # Extract JSON object if surrounded by extra text
             match = re.search(r"\{[\s\S]*\}", text)
             if match:
                 text = match.group(0)
@@ -189,14 +190,9 @@ class AppCategorizer:
 
             for filename, category in list(result.items()):
                 if category not in DEFAULT_CATEGORIES:
-                    # Case-insensitive or singular match (e.g. "Game" -> "Games")
+                    cat_norm = str(category).lower().rstrip("s")
                     matched = next(
-                        (
-                            c
-                            for c in DEFAULT_CATEGORIES
-                            if c.lower() == str(category).lower().rstrip("s")
-                            or c.lower().rstrip("s") == str(category).lower().rstrip("s")
-                        ),
+                        (c for c in DEFAULT_CATEGORIES if c.lower().rstrip("s") == cat_norm),
                         "Utility",
                     )
                     result[filename] = matched
@@ -212,7 +208,6 @@ class AppCategorizer:
         results: Dict[str, str] = {}
         remaining: Dict[str, DesktopEntry] = {}
 
-        # Fast-path obvious games (Steam/Lutris/Heroic)
         for filename, entry in entries.items():
             if entry.is_obvious_game():
                 results[filename] = "Games"

@@ -1,21 +1,23 @@
+"""Vicinae launcher backend: native @vicinae/api extension & pinned favorites."""
+
 import json
 import logging
-import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from config import (
-    DEFAULT_CATEGORIES,
+from ..config import (
     VICINAE_CONFIG_PATH,
+    VICINAE_DATA_DIR,
     VICINAE_EXT_AUTHOR,
     VICINAE_EXT_DIR,
     VICINAE_EXT_ID,
     VICINAE_METADATA_PATH,
     XDG_DATA_HOME,
 )
-from parser import DesktopEntry
+from ..parser import DesktopEntry
+from .base import MenuBackend, clean_exec, group_and_sort
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +177,7 @@ function createCategoryView(categoryName, fallbackIcon) {
           ? jsx.jsx(api.List.EmptyView, {
               icon: api.Icon[fallbackIcon] || api.Icon.AppWindow,
               title: `No applications in ${categoryName}`,
-              description: "Run 'vicicat categorize && vicicat menus' to update.",
+              description: "Run 'catty categorize && catty menus' to update.",
             })
           : jsx.jsx(api.List.Section, {
               title: categoryName,
@@ -242,22 +244,38 @@ module.exports = { createCategoryView, createAllCategoriesView };
 """.lstrip()
 
 
-class MenuGenerator:
+class VicinaeBackend(MenuBackend):
     """Generates native Vicinae extension and updates Vicinae settings.json."""
 
-    SKIP_DESKTOP_CATEGORIES = {"X-LSP-Plugins"}
-    SKIP_APP_NAMES = {"Steamworks SDK Redist", "Steamworks Common Redistributables", "Proton"}
+    name = "vicinae"
 
-    def __init__(self):
+    def __init__(
+        self,
+        ext_dir: Path = VICINAE_EXT_DIR,
+        config_path: Path = VICINAE_CONFIG_PATH,
+        metadata_path: Path = VICINAE_METADATA_PATH,
+    ):
+        self.ext_dir = ext_dir
+        self.config_path = config_path
+        self.metadata_path = metadata_path
         self._icon_cache: Dict[str, Optional[str]] = {}
         self._icon_search_dirs = self._build_icon_search_dirs()
 
+    def is_available(self) -> bool:
+        return bool(shutil.which("vicinae")) or self.config_path.exists() or VICINAE_DATA_DIR.exists()
+
+    def output_exists(self) -> bool:
+        return (self.ext_dir / "package.json").exists()
+
+    def _strip_jsonc_comments(self, text: str) -> str:
+        return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+
     def _get_disabled_apps(self) -> set:
         disabled = set()
-        if not VICINAE_CONFIG_PATH.exists():
+        if not self.config_path.exists():
             return disabled
         try:
-            raw = self._strip_jsonc_comments(VICINAE_CONFIG_PATH.read_text(encoding="utf-8"))
+            raw = self._strip_jsonc_comments(self.config_path.read_text(encoding="utf-8"))
             cfg = json.loads(raw)
             eps = cfg.get("providers", {}).get("applications", {}).get("entrypoints", {})
             for app_id, meta in eps.items():
@@ -269,11 +287,7 @@ class MenuGenerator:
 
     def _build_icon_search_dirs(self) -> List[Path]:
         dirs = []
-        bases = [
-            XDG_DATA_HOME / "icons",
-            Path.home() / ".icons",
-            Path("/usr/share/icons"),
-        ]
+        bases = [XDG_DATA_HOME / "icons", Path.home() / ".icons", Path("/usr/share/icons")]
         themes = ["hicolor", "breeze-dark", "breeze", "Adwaita", "Papirus-Dark", "Papirus"]
         sizes = ["scalable", "256x256", "128x128", "64x64", "48x48", "32x32", "apps"]
         for base in bases:
@@ -315,20 +329,13 @@ class MenuGenerator:
     def _sanitize_slug(self, category: str) -> str:
         return category.lower().replace(" ", "-")
 
-    def _clean_exec(self, exec_cmd: str) -> str:
-        for code in ["%u", "%U", "%f", "%F", "%d", "%D", "%n", "%N", "%i", "%c", "%k", "%v", "%m"]:
-            exec_cmd = exec_cmd.replace(code, "")
-        return exec_cmd.strip()
-
     def get_usage_data(self) -> Dict[str, Dict]:
-        """Load app visit counts directly from Vicinae's metadata.json."""
         usage: Dict[str, Dict] = {}
-        if not VICINAE_METADATA_PATH.exists():
+        if not self.metadata_path.exists():
             return usage
         try:
-            raw = json.loads(VICINAE_METADATA_PATH.read_text(encoding="utf-8"))
-            visited = raw.get("visited", {})
-            for key, stats in visited.items():
+            raw = json.loads(self.metadata_path.read_text(encoding="utf-8"))
+            for key, stats in raw.get("visited", {}).items():
                 if key.startswith("applications:"):
                     app_id = key.split("applications:", 1)[1]
                     usage[f"{app_id}.desktop"] = {
@@ -356,60 +363,24 @@ class MenuGenerator:
         dry_run: bool = False,
         restart: bool = True,
     ) -> bool:
-        disabled_apps = self._get_disabled_apps()
-        by_category: Dict[str, List[DesktopEntry]] = {}
-        for filename, category in categorized.items():
-            entry = entries.get(filename)
-            if not entry:
-                continue
-            if entry.app_id in disabled_apps:
-                continue
-            if any(c in self.SKIP_DESKTOP_CATEGORIES for c in entry.categories):
-                continue
-            if any(skip.lower() in entry.name.lower() for skip in self.SKIP_APP_NAMES):
-                continue
-            by_category.setdefault(category, []).append(entry)
-
         usage_data = self.get_usage_data()
-
-        def get_count(filename: str) -> int:
-            return usage_data.get(filename, {}).get("count", 0)
-
-        for cat in by_category:
-            by_category[cat].sort(key=lambda e: (-get_count(e.filename), e.name.lower()))
-            # Deduplicate identical display names within same category (keep highest-usage entry)
-            seen_names = set()
-            deduped = []
-            for e in by_category[cat]:
-                norm = e.name.strip().lower()
-                if norm not in seen_names:
-                    seen_names.add(norm)
-                    deduped.append(e)
-            by_category[cat] = deduped
-
-        category_list = list(by_category.keys())
-        category_list.sort(
-            key=lambda c: (
-                -sum(get_count(e.filename) for e in by_category[c]),
-                DEFAULT_CATEGORIES.index(c) if c in DEFAULT_CATEGORIES else len(DEFAULT_CATEGORIES),
-            )
+        category_list, by_category = group_and_sort(
+            categorized, entries, usage_data, disabled_app_ids=self._get_disabled_apps()
         )
 
         if dry_run:
-            print(f"\n[DRY RUN] Would generate Vicinae extension in: {VICINAE_EXT_DIR}")
+            print(f"\n[DRY RUN] Would generate Vicinae extension in: {self.ext_dir}")
             for cat in category_list:
                 apps = by_category[cat]
-                total_u = sum(get_count(e.filename) for e in apps)
+                total_u = sum(int(usage_data.get(e.filename, {}).get("count", 0)) for e in apps)
                 names = ", ".join(e.name for e in apps[:5])
                 if len(apps) > 5:
                     names += f", ... (+{len(apps) - 5})"
                 print(f"  - {cat}: {len(apps)} apps (usage: {total_u}) [{names}]")
             return True
 
-        assets_dir = VICINAE_EXT_DIR / "assets"
+        assets_dir = self.ext_dir / "assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write extension icon + category SVG icons
         self._write_svg_icon(assets_dir / "apps.svg", "apps", "#cba6f7")
 
         commands_manifest = [
@@ -422,7 +393,6 @@ class MenuGenerator:
                 "mode": "view",
             }
         ]
-
         apps_by_category_payload: Dict[str, List[Dict]] = {}
         category_icons_payload: Dict[str, str] = {}
 
@@ -446,7 +416,6 @@ class MenuGenerator:
                     "mode": "view",
                 }
             )
-
             apps_by_category_payload[cat] = [
                 {
                     "id": e.app_id,
@@ -454,27 +423,24 @@ class MenuGenerator:
                     "name": e.name,
                     "comment": e.comment,
                     "genericName": e.generic_name,
-                    "exec": self._clean_exec(e.exec_cmd),
+                    "exec": clean_exec(e.exec_cmd),
                     "iconPath": self._resolve_icon_path(e.icon),
                 }
                 for e in app_entries
             ]
-
-            # Write entrypoint JS for this category
             cmd_js = (
                 '"use strict";\n'
                 'const { createCategoryView } = require("./shared.js");\n'
                 f'module.exports = {{ default: createCategoryView({json.dumps(cat)}, {json.dumps(meta["icon"])}) }};\n'
             )
-            (VICINAE_EXT_DIR / f"{slug}.js").write_text(cmd_js, encoding="utf-8")
+            (self.ext_dir / f"{slug}.js").write_text(cmd_js, encoding="utf-8")
 
-        # Write apps.js & shared.js & categories.json & package.json
-        (VICINAE_EXT_DIR / "shared.js").write_text(SHARED_JS_CODE, encoding="utf-8")
-        (VICINAE_EXT_DIR / "apps.js").write_text(
+        (self.ext_dir / "shared.js").write_text(SHARED_JS_CODE, encoding="utf-8")
+        (self.ext_dir / "apps.js").write_text(
             '"use strict";\nconst { createAllCategoriesView } = require("./shared.js");\nmodule.exports = { default: createAllCategoriesView() };\n',
             encoding="utf-8",
         )
-        (VICINAE_EXT_DIR / "categories.json").write_text(
+        (self.ext_dir / "categories.json").write_text(
             json.dumps(
                 {
                     "categoriesOrder": category_list,
@@ -497,32 +463,19 @@ class MenuGenerator:
             "icon": "apps.svg",
             "commands": commands_manifest,
         }
-        (VICINAE_EXT_DIR / "package.json").write_text(
-            json.dumps(pkg_json, indent=2), encoding="utf-8"
-        )
+        (self.ext_dir / "package.json").write_text(json.dumps(pkg_json, indent=2), encoding="utf-8")
 
         self.update_vicinae_config(category_list)
         if restart:
             self.restart_vicinae()
         return True
 
-    def _strip_jsonc_comments(self, text: str) -> str:
-        out = []
-        for line in text.splitlines():
-            if line.lstrip().startswith("//"):
-                continue
-            out.append(line)
-        return "\n".join(out)
-
     def update_vicinae_config(self, categories: List[str]) -> bool:
-        """Pin all non-empty category commands to favorites in ~/.config/vicinae/settings.json."""
-        if not VICINAE_CONFIG_PATH.exists():
-            logger.warning(f"Vicinae config not found at {VICINAE_CONFIG_PATH}")
+        if not self.config_path.exists():
+            logger.warning(f"Vicinae config not found at {self.config_path}")
             return False
-
         try:
-            shutil.copy2(VICINAE_CONFIG_PATH, VICINAE_CONFIG_PATH.with_suffix(".json.bak"))
-            raw_text = VICINAE_CONFIG_PATH.read_text(encoding="utf-8")
+            raw_text = self.config_path.read_text(encoding="utf-8")
             config = json.loads(self._strip_jsonc_comments(raw_text))
 
             prefix = f"@{VICINAE_EXT_AUTHOR}/{VICINAE_EXT_ID}:"
@@ -533,61 +486,40 @@ class MenuGenerator:
             cat_favs.append(f"{prefix}apps")
 
             config["favorites"] = cat_favs + existing_favs
-            VICINAE_CONFIG_PATH.write_text(json.dumps(config, indent=3) + "\n", encoding="utf-8")
-            logger.info(f"Updated favorites in {VICINAE_CONFIG_PATH}")
+            self.config_path.write_text(json.dumps(config, indent=3) + "\n", encoding="utf-8")
+            logger.info(f"Updated favorites in {self.config_path}")
             return True
         except Exception as e:
             logger.error(f"Failed to update Vicinae config: {e}")
             return False
 
+    def restart_vicinae(self) -> None:
+        try:
+            res = subprocess.run(
+                ["systemctl", "--user", "is-active", "--quiet", "vicinae.service"],
+                check=False,
+            )
+            if res.returncode == 0:
+                subprocess.run(["systemctl", "--user", "restart", "vicinae.service"], check=True)
+                logger.info("Restarted vicinae.service")
+        except Exception as e:
+            logger.warning(f"Could not restart vicinae.service: {e}")
+
     def cleanup(self, restart: bool = True) -> bool:
         try:
-            if VICINAE_EXT_DIR.exists():
-                for f in VICINAE_EXT_DIR.glob("*.js"):
-                    f.unlink()
-                for f in VICINAE_EXT_DIR.glob("*.json"):
-                    f.unlink()
-                assets = VICINAE_EXT_DIR / "assets"
-                if assets.exists():
-                    for f in assets.glob("*"):
-                        f.unlink()
-                    assets.rmdir()
-                VICINAE_EXT_DIR.rmdir()
-
-            if VICINAE_CONFIG_PATH.exists():
-                shutil.copy2(VICINAE_CONFIG_PATH, VICINAE_CONFIG_PATH.with_suffix(".json.bak"))
-                raw_text = VICINAE_CONFIG_PATH.read_text(encoding="utf-8")
+            if self.ext_dir.exists():
+                shutil.rmtree(self.ext_dir)
+            if self.config_path.exists():
+                raw_text = self.config_path.read_text(encoding="utf-8")
                 config = json.loads(self._strip_jsonc_comments(raw_text))
                 prefix = f"@{VICINAE_EXT_AUTHOR}/{VICINAE_EXT_ID}:"
-                if "favorites" in config:
-                    config["favorites"] = [
-                        f for f in config["favorites"] if not str(f).startswith(prefix)
-                    ]
-                VICINAE_CONFIG_PATH.write_text(
-                    json.dumps(config, indent=3) + "\n", encoding="utf-8"
-                )
+                config["favorites"] = [
+                    f for f in config.get("favorites", []) if not str(f).startswith(prefix)
+                ]
+                self.config_path.write_text(json.dumps(config, indent=3) + "\n", encoding="utf-8")
             if restart:
                 self.restart_vicinae()
             return True
         except Exception as e:
-            logger.error(f"Cleanup failed: {e}")
+            logger.error(f"Failed to cleanup Vicinae extension: {e}")
             return False
-
-    def restart_vicinae(self) -> None:
-        try:
-            res = subprocess.run(
-                ["systemctl", "--user", "is-active", "vicinae.service"],
-                capture_output=True,
-                text=True,
-            )
-            if res.returncode == 0:
-                subprocess.run(["systemctl", "--user", "restart", "vicinae.service"], check=False)
-                return
-            subprocess.Popen(
-                ["vicinae", "server"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except Exception as e:
-            logger.debug(f"Could not restart vicinae: {e}")
