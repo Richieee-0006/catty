@@ -1,5 +1,8 @@
 __pycache__/
 *.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
 .venv/
 venv/
 env/
@@ -7,3 +10,6 @@ env/
 .idea/
 .vscode/
 *.log
+build/
+dist/
+src/catty/backends/gob_reader

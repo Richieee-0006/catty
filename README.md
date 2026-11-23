@@ -1,89 +1,63 @@
-# ViciCat
+# Catty
 
-Automated application & game categorizer for **Vicinae** using **Local LLMs** (Ollama / OpenAI-compatible `llama-swap` / `llama-server`) with **Cloud LLM** (Google Gemini / Gemma REST API) fallback.
+Unified Linux application & game categorizer for **Spot** (`spottycat`), **Vicinae** (`vicicat`), and **Walker / Elephant** (`catwalker`).
 
-Forked and reworked from [CatWalker](https://github.com/Richieee-0006/CatWalker) specifically for the [Vicinae](https://vicinae.com) launcher.
+Combines [CatWalker](https://github.com/Richieee-0006/CatWalker) and [ViciCat](https://github.com/Richieee-0006/ViciCat) into one shared categorization core with pluggable launcher backends.
 
 ## Features
 
-- **Native Vicinae Extension**: Generates a native `@vicinae/api` extension (`~/.local/share/vicinae/extensions/store.vicinae.vicicat`) with dedicated commands for every category (`Games`, `Development`, `Browser`, `Internet`, `Media`, `Graphics`, `Office`, `Education`, `Utility`, `System`, `Settings`) plus a combined `Apps (Categories)` browser with a category dropdown filter.
-- **Pinned Root Favorites**: Automatically pins all non-empty categories (sorted by usage) to the top of Vicinae's root view (`favorites` in `~/.config/vicinae/settings.json`) while keeping individual apps searchable when typing.
-- **Live Usage Sorting**: Reads `~/.local/share/vicinae/metadata.json` directly so both category order and apps inside `Games` (and every other group) are sorted by real launch frequency and recency.
-- **Local-First + Cloud Fallback**:
-  1. **Local LLM (default primary)**: Auto-detects running [Ollama](https://ollama.com) (`http://127.0.0.1:11434`, default model `gemma4:26b-a4b-it-qat` or first available local model) or any OpenAI-compatible server (`http://127.0.0.1:8080/v1`, e.g. `llama-swap`).
-  2. **Cloud LLM (fallback)**: Falls back to Google's Gemini/Gemma REST API (`gemma-3-27b-it`) if `GEMINI_API_KEY` is set.
-  3. **Zero-Token Game Fast-Path**: Automatically detects Steam (`steam://rungameid/`), Lutris (`lutris:rungame`), and Heroic (`heroic://launch`) `.desktop` shortcuts as `Games` instantly.
-- **Automated Watcher & Timer**: Includes `systemd --user` `.path` watcher (monitoring `/usr/share/applications` and `~/.local/share/applications`) and `.timer` so newly installed Steam/Heroic/pacman games are grouped automatically.
+- **Shared LLM Categorizer**: Local-first via [Ollama](https://ollama.com) or OpenAI-compatible servers (`llama-swap` on `:8080`), with Google Gemini/Gemma REST fallback (`GEMINI_API_KEY`).
+- **Zero-Token Game Fast-Path**: Instantly classifies Steam (`steam://rungameid/`), Lutris (`lutris:rungame`), Heroic (`heroic://launch`), and Prism Launcher entries into `Games`.
+- **Safe `.desktop` Writes**: Updates only `~/.local/share/applications/` with timestamped backups and `catty rollback`.
+- **Three Launcher Backends**:
+  - **Spot (`--target spot`)**: Generates `~/.config/spot/catty/` (`categories.toml`, `cat_<slug>.toml`, `grouped.toml` collapsible tree, `launcher.toml` with `@` category source) and reads `$XDG_STATE_HOME/spot/frecency.json`.
+  - **Vicinae (`--target vicinae`)**: Generates native `@vicinae/api` extension in `~/.local/share/vicinae/extensions/store.vicinae.vicicat`, pins favorites, and reads `metadata.json` visit counts.
+  - **Walker (`--target walker`)**: Generates Elephant TOML menus in `~/.config/elephant/menus/`, updates `~/.config/walker/config.toml`, and reads Elephant `.gob` history via `gob_reader.go`.
+- **Systemd Automation**: `catty service install` sets up `catty-watcher.path` and `catty-sync.timer`.
 
-## Replicable Setup
-
-### 1. Clone & Install
+## Quick Start
 
 ```bash
-git clone https://github.com/Richieee-0006/ViciCat.git ~/Projects/ViciCat
-cd ~/Projects/ViciCat
+git clone https://github.com/Richieee-0006/catty.git ~/Projects/catty
+cd ~/Projects/catty
 
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 
-chmod +x vicicat main.py
-ln -sf "$(pwd)/vicicat" ~/.local/bin/vicicat
+ln -sf "$(pwd)/catty" ~/.local/bin/catty
+# Optional per-launcher aliases:
+ln -sf "$(pwd)/catty" ~/.local/bin/spottycat
+ln -sf "$(pwd)/catty" ~/.local/bin/vicicat
+ln -sf "$(pwd)/catty" ~/.local/bin/catwalker
 ```
 
-### 2. Configure Local and/or Cloud LLM
-
-#### Option A: Local LLM via Ollama (Recommended, zero API key required)
-```bash
-# Install & start Ollama, then pull Gemma 4 (or any instruction model):
-ollama pull gemma4:26b-a4b-it-qat
-```
-*(If a different model is installed in Ollama, ViciCat auto-detects it via `/api/tags`, or you can set `VICICAT_LOCAL_MODEL` in `.env`.)*
-
-#### Option B: Local OpenAI-Compatible Server (`llama-swap` / `llama-server`)
-```bash
-export VICICAT_LOCAL_URL="http://127.0.0.1:8080"
-export VICICAT_LOCAL_MODEL="coder-pro"
-```
-
-#### Option C: Cloud LLM via Google Gemini REST API
-```bash
-cat << 'EOF' > ~/Projects/ViciCat/.env
-GEMINI_API_KEY="your-google-ai-studio-key"
-VICICAT_PROVIDER="auto"   # auto (local-first -> cloud) | local | cloud
-EOF
-```
-
-### 3. Categorize & Generate Vicinae Groups
+## Usage
 
 ```bash
-# Scan uncategorized desktop apps
-vicicat scan --uncategorized
+# Scan & categorize uncategorized apps
+catty scan --uncategorized
+catty categorize --yes
 
-# Categorize uncategorized apps (Local-first -> Cloud fallback) and generate Vicinae extension
-vicicat categorize --yes
-vicicat menus
+# Generate menus (auto-detects running launcher, or specify target)
+catty menus --target spot
+catty menus --target vicinae
+catty menus --target walker
+catty menus --target all
 
-# Or run both non-interactively in one step:
-vicicat auto --force
+# Non-interactive sync + systemd watcher
+catty auto --target spot --force
+catty service install --target spot
 ```
 
-### 4. Enable Automatic Background Grouping (`systemd --user`)
-
-Automatically categorize and group new games/apps whenever Steam, Heroic, Lutris, Flatpak, or `pacman` adds a `.desktop` file:
+### Using SpottyCat with `spot`
 
 ```bash
-vicicat service install
-vicicat service status
+spot ~/.config/spot/catty/categories.toml   # category picker -> chained app list with Back
+spot ~/.config/spot/catty/grouped.toml      # collapsible category tree
+spot ~/.config/spot/catty/launcher.toml     # full app launcher with @, =, ., > prefixes
 ```
 
-## CLI Reference
+## License
 
-```bash
-vicicat scan [-u|--uncategorized] [-c|--category Games] [-l|--limit 20]
-vicicat categorize [-y|--yes] [--dry-run] [-r|--recategorize] [--provider auto|local|cloud] [--model MODEL]
-vicicat menus [--dry-run] [--clean]
-vicicat auto [-f|--force]
-vicicat service [install|uninstall|status]
-vicicat rollback [-l|--list] [-t|--timestamp TS]
-```
+MIT — richieee @ 2026

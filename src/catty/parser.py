@@ -1,15 +1,22 @@
+"""Parser for XDG .desktop application entries."""
+
 import configparser
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from config import SYSTEM_APPS_DIR, USER_APPS_DIR
+from .config import (
+    FLATPAK_SYSTEM_APPS_DIR,
+    FLATPAK_USER_APPS_DIR,
+    SYSTEM_APPS_DIR,
+    USER_APPS_DIR,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class DesktopEntry:
-    """Represents a parsed .desktop file"""
+    """Represents a parsed .desktop file."""
 
     def __init__(self, filename: str, filepath: Path):
         self.filename = filename
@@ -20,6 +27,7 @@ class DesktopEntry:
         self.categories: List[str] = []
         self.icon: str = ""
         self.exec_cmd: str = ""
+        self.terminal: bool = False
         self.no_display: bool = False
 
     @property
@@ -41,20 +49,26 @@ class DesktopEntry:
         )
 
     def get_context(self) -> str:
-        context_parts = [self.name]
+        parts = [self.name]
         if self.generic_name and self.generic_name != self.name:
-            context_parts.append(f"({self.generic_name})")
+            parts.append(f"({self.generic_name})")
         if self.comment:
-            context_parts.append(f"- {self.comment}")
+            parts.append(f"- {self.comment}")
         if "steam" in self.exec_cmd.lower():
-            context_parts.append("[Steam]")
-        return " ".join(context_parts)
+            parts.append("[Steam]")
+        return " ".join(parts)
 
 
 class DesktopFileParser:
-    """Parser for .desktop files"""
+    """Parser for .desktop files across system, Flatpak, and user directories."""
 
-    def __init__(self):
+    def __init__(self, search_dirs: Optional[List[Path]] = None):
+        self.search_dirs = search_dirs or [
+            SYSTEM_APPS_DIR,
+            FLATPAK_SYSTEM_APPS_DIR,
+            FLATPAK_USER_APPS_DIR,
+            USER_APPS_DIR,
+        ]
         self.entries: Dict[str, DesktopEntry] = {}
 
     def parse_file(self, filepath: Path) -> Optional[DesktopEntry]:
@@ -79,6 +93,7 @@ class DesktopFileParser:
             entry.generic_name = section.get("GenericName", "")
             entry.icon = section.get("Icon", "")
             entry.exec_cmd = section.get("Exec", "")
+            entry.terminal = section.get("Terminal", "").lower() == "true"
 
             categories_str = section.get("Categories", "")
             if categories_str:
@@ -90,7 +105,7 @@ class DesktopFileParser:
             return None
 
     def scan_directories(self, directories: List[Path]) -> Dict[str, DesktopEntry]:
-        entries = {}
+        entries: Dict[str, DesktopEntry] = {}
         for directory in directories:
             if not directory.exists():
                 continue
@@ -101,7 +116,7 @@ class DesktopFileParser:
         return entries
 
     def scan_all(self) -> Dict[str, DesktopEntry]:
-        self.entries = self.scan_directories([SYSTEM_APPS_DIR, USER_APPS_DIR])
+        self.entries = self.scan_directories(self.search_dirs)
         return self.entries
 
     def get_uncategorized(self) -> Dict[str, DesktopEntry]:
@@ -111,6 +126,4 @@ class DesktopFileParser:
         return {f: e for f, e in self.entries.items() if category in e.categories}
 
     def get_system_only(self) -> Dict[str, DesktopEntry]:
-        return {
-            f: e for f, e in self.entries.items() if not (USER_APPS_DIR / f).exists()
-        }
+        return {f: e for f, e in self.entries.items() if not (USER_APPS_DIR / f).exists()}
