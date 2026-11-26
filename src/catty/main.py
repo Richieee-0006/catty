@@ -281,9 +281,11 @@ WantedBy=timers.target
 """,
         "catty-sync.service": f"""[Unit]
 Description=Catty automatic app categorizer and launcher menu generator
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
+ExecStartPre=/usr/bin/sleep 2
 ExecStart={exec_bin} auto --target {args.target}
 """,
     }
@@ -292,6 +294,11 @@ ExecStart={exec_bin} auto --target {args.target}
         for name, content in units.items():
             (systemd_dir / name).write_text(content, encoding="utf-8")
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+        subprocess.run(
+            ["systemctl", "--user", "reset-failed", "catty-sync.service", "catty-watcher.path"],
+            capture_output=True,
+            check=False,
+        )
         subprocess.run(
             ["systemctl", "--user", "enable", "--now", "catty-watcher.path", "catty-sync.timer"],
             check=True,

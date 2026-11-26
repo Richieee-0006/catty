@@ -184,6 +184,56 @@ def test_backend_dependencies_and_cli_deps() -> None:
         assert cli_main(argv=["menus", "--target", "walker"]) == 1
 
 
+def test_spot_refresh_daemon_prefers_systemd() -> None:
+    class _Res:
+        def __init__(self, rc: int):
+            self.returncode = rc
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["systemctl", "--user", "is-active"]:
+            return _Res(0)
+        return _Res(0)
+
+    with (
+        patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
+        SpotBackend().refresh_daemon()
+
+    assert ["systemctl", "--user", "restart", "spot.service"] in calls
+    assert ["spot", "--quit"] not in calls
+
+    calls.clear()
+
+    def fake_run_inactive(cmd, **_kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["systemctl", "--user", "is-active"]:
+            return _Res(3)
+        return _Res(0)
+
+    with (
+        patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+        patch("subprocess.run", side_effect=fake_run_inactive),
+        patch("catty.backends.spot.time.sleep"),
+    ):
+        SpotBackend().refresh_daemon()
+
+    assert ["spot", "--quit"] in calls
+    assert ["systemctl", "--user", "start", "spot.service"] in calls
+
+    calls.clear()
+    with (
+        patch("shutil.which", side_effect=lambda name: "/usr/bin/spot" if name == "spot" else None),
+        patch("subprocess.run", side_effect=lambda cmd, **_kw: calls.append(cmd) or _Res(0)),
+    ):
+        SpotBackend().refresh_daemon()
+
+    assert calls == [["spot", "--status"], ["spot", "--quit"]]
+
+
 def test_clean_exec_and_get_backend() -> None:
     assert clean_exec("code --reuse-window %F") == "code --reuse-window"
     assert get_backend("spot").name == "spot"
