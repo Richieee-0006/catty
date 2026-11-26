@@ -1,0 +1,40 @@
+# Maintainer: richieee <https://github.com/Richieee-0006>
+pkgname=catty
+pkgver=1.1.0
+pkgrel=1
+pkgdesc="Unified Linux app & game categorizer for Spot, Vicinae, and Walker/Elephant"
+arch=('any')
+url="https://github.com/Richieee-0006/catty"
+license=('MIT')
+depends=(
+    'python'
+    'python-requests'
+)
+makedepends=(
+    'python-build'
+    'python-installer'
+    'python-setuptools'
+    'python-wheel'
+)
+optdepends=(
+    'spot-bin: Spot / SpottyCat launcher backend (>= 0.7.0, https://github.com/KopyTKG/spot)'
+    'vicinae-bin: Vicinae / ViciCat launcher backend (https://github.com/vicinaehq/vicinae)'
+    'walker-bin: Walker / CatWalker launcher backend (https://github.com/abenz1267/walker)'
+    'elephant-bin: Elephant menu provider required by Walker backend (https://github.com/abenz1267/elephant)'
+    'libqalculate: = calculator source in Spot launcher'
+    'fd: . file search source in Spot launcher'
+    'wl-clipboard: copy calculator/source results to clipboard in Spot'
+    'go: builds gob_reader.go for Elephant usage history sorting in Walker'
+)
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "${pkgname}-${pkgver}"
+    python -m build --wheel --no-isolation
+}
+
+package() {
+    cd "${pkgname}-${pkgver}"
+    python -m installer --destdir="${pkgdir}" dist/*.whl
+}

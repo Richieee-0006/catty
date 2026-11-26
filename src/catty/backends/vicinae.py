@@ -17,7 +17,7 @@ from ..config import (
     XDG_DATA_HOME,
 )
 from ..parser import DesktopEntry
-from .base import MenuBackend, clean_exec, group_and_sort
+from .base import MenuBackend, ToolDep, clean_exec, group_and_sort
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +248,15 @@ class VicinaeBackend(MenuBackend):
     """Generates native Vicinae extension and updates Vicinae settings.json."""
 
     name = "vicinae"
+    dependencies = (
+        ToolDep(
+            binary="vicinae",
+            package="vicinae-bin",
+            url="https://github.com/vicinaehq/vicinae",
+            required=True,
+            purpose="Vicinae launcher daemon & CLI",
+        ),
+    )
 
     def __init__(
         self,
