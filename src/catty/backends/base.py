@@ -1,10 +1,26 @@
 """Base interface and shared grouping/sorting helpers for launcher backends."""
 
+import shutil
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..config import DEFAULT_CATEGORIES
 from ..parser import DesktopEntry
+
+
+@dataclass(frozen=True)
+class ToolDep:
+    """External launcher or helper tool required/optional for a backend."""
+
+    binary: str
+    package: str
+    url: str
+    required: bool = True
+    purpose: str = ""
+
+    def is_installed(self) -> bool:
+        return bool(shutil.which(self.binary))
 
 SKIP_DESKTOP_CATEGORIES = {"X-LSP-Plugins"}
 SKIP_APP_NAMES = {
@@ -70,6 +86,13 @@ class MenuBackend(ABC):
     """Abstract launcher menu generator backend."""
 
     name: str = ""
+    dependencies: Tuple[ToolDep, ...] = ()
+
+    def check_dependencies(self) -> Tuple[List[ToolDep], List[ToolDep]]:
+        """Return (missing_required, missing_optional) external tool dependencies."""
+        missing_req = [d for d in self.dependencies if d.required and not d.is_installed()]
+        missing_opt = [d for d in self.dependencies if not d.required and not d.is_installed()]
+        return missing_req, missing_opt
 
     @abstractmethod
     def is_available(self) -> bool:

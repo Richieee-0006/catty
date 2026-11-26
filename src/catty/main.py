@@ -123,6 +123,22 @@ def cmd_categorize(args) -> int:
     return 0
 
 
+def cmd_deps(args) -> int:
+    backends = resolve_targets(args.target)
+    all_ok = True
+    for backend in backends:
+        missing_req, _ = backend.check_dependencies()
+        status = "OK" if not missing_req else "MISSING REQUIRED"
+        print(f"[{backend.name}] {status}")
+        for dep in backend.dependencies:
+            mark = "OK" if dep.is_installed() else ("MISSING" if dep.required else "optional")
+            kind = "req" if dep.required else "opt"
+            print(f"  - {dep.binary:<10} [{mark:<8}] ({kind}) pkg={dep.package}  {dep.url}")
+        if missing_req:
+            all_ok = False
+    return 0 if all_ok else 1
+
+
 def cmd_menus(args) -> int:
     backends = resolve_targets(args.target)
     if args.clean:
@@ -133,6 +149,23 @@ def cmd_menus(args) -> int:
             elif not args.quiet:
                 print(f"Cleaned generated menus for {backend.name}.")
         return 0 if ok else 1
+
+    if not args.dry_run and not args.ignore_deps:
+        missing_any = False
+        for backend in backends:
+            missing_req, missing_opt = backend.check_dependencies()
+            if missing_req:
+                missing_any = True
+                details = ", ".join(f"{d.binary} (pkg: {d.package}, {d.url})" for d in missing_req)
+                logger.error(
+                    f"Missing required launcher dependency for '{backend.name}': {details}. "
+                    "Install it or pass --ignore-deps."
+                )
+            elif missing_opt and not args.quiet:
+                opt_names = ", ".join(f"{d.binary} ({d.package})" for d in missing_opt)
+                logger.info(f"Optional tools missing for '{backend.name}': {opt_names}")
+        if missing_any:
+            return 1
 
     parser = DesktopFileParser()
     entries = parser.scan_all()
@@ -310,7 +343,7 @@ def cmd_spot_open(args) -> int:
     return SpotBackend().open_category(" ".join(args.category))
 
 
-def main(default_target: Optional[str] = None) -> int:
+def main(default_target: Optional[str] = None, argv: Optional[list[str]] = None) -> int:
     target_default = default_target or DEFAULT_TARGET
     parser = argparse.ArgumentParser(
         description="Catty - Unified app & game categorizer for Walker, Vicinae, and Spot"
@@ -340,6 +373,12 @@ def main(default_target: Optional[str] = None) -> int:
     p_menu.add_argument("--clean", action="store_true")
     p_menu.add_argument("-q", "--quiet", action="store_true")
     p_menu.add_argument("--no-restart", action="store_true")
+    p_menu.add_argument("--ignore-deps", action="store_true")
+
+    p_deps = sub.add_parser("deps", aliases=["check"], help="Check external launcher tool dependencies")
+    p_deps.add_argument(
+        "-t", "--target", choices=["auto", "spot", "vicinae", "walker", "all"], default=target_default
+    )
 
     p_auto = sub.add_parser("auto", help="Non-interactive categorize + menu sync")
     p_auto.add_argument(
@@ -370,7 +409,7 @@ def main(default_target: Optional[str] = None) -> int:
     p_so = sub.add_parser("spot-open", help=argparse.SUPPRESS)
     p_so.add_argument("category", nargs="+")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not args.command:
         parser.print_help()
         return 0
@@ -379,6 +418,8 @@ def main(default_target: Optional[str] = None) -> int:
         "scan": cmd_scan,
         "categorize": cmd_categorize,
         "menus": cmd_menus,
+        "deps": cmd_deps,
+        "check": cmd_deps,
         "auto": cmd_auto,
         "service": cmd_service,
         "rollback": cmd_rollback,

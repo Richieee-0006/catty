@@ -1,4 +1,4 @@
-"""Spot (SpottyCat) launcher backend: TOML category dialogs, collapsible tree & dynamic source."""
+"""Spot (SpottyCat) launcher backend: TOML category dialogs, collapsible tree, run bar & source."""
 
 import json
 import logging
@@ -11,7 +11,7 @@ from typing import Dict, List
 
 from ..config import SPOT_CATTY_DIR, SPOT_CONFIG_DIR, SPOT_FRECENCY_PATH
 from ..parser import DesktopEntry
-from .base import MenuBackend, clean_exec, group_and_sort
+from .base import MenuBackend, ToolDep, clean_exec, group_and_sort
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +21,46 @@ def _toml_str(value: str) -> str:
 
 
 class SpotBackend(MenuBackend):
-    """Generates Spot TOML dialogs (categories, per-category lists, collapsible tree, launcher)."""
+    """Generates Spot (>= 0.7.0) TOML dialogs: categories, per-category lists, tree, quick bar, launcher."""
 
     name = "spot"
+    dependencies = (
+        ToolDep(
+            binary="spot",
+            package="spot-bin",
+            url="https://github.com/KopyTKG/spot",
+            required=True,
+            purpose="Wayland dialog & launcher runtime (>= 0.7.0)",
+        ),
+        ToolDep(
+            binary="qalc",
+            package="libqalculate",
+            url="https://qalculate.github.io",
+            required=False,
+            purpose="= calculator source in launcher.toml",
+        ),
+        ToolDep(
+            binary="fd",
+            package="fd",
+            url="https://github.com/sharkdp/fd",
+            required=False,
+            purpose=". file search source in launcher.toml",
+        ),
+        ToolDep(
+            binary="wl-copy",
+            package="wl-clipboard",
+            url="https://github.com/bugaevc/wl-clipboard",
+            required=False,
+            purpose="copy calculator/source output to clipboard",
+        ),
+        ToolDep(
+            binary="gtk-launch",
+            package="glib2",
+            url="https://gitlab.gnome.org/GNOME/glib",
+            required=False,
+            purpose="launch .desktop entries by desktop id",
+        ),
+    )
 
     def __init__(
         self,
@@ -69,6 +106,7 @@ class SpotBackend(MenuBackend):
             [
                 f"title = {_toml_str(category)}",
                 'anchor = "top"',
+                "margin_top = 120",
                 "width = 560",
                 'keyboard = "exclusive"',
                 'footer = "Enter to launch · Backspace/Esc to return"',
@@ -95,10 +133,14 @@ class SpotBackend(MenuBackend):
             [
                 'title = "Categories"',
                 'anchor = "top"',
+                "margin_top = 120",
                 "width = 480",
                 "toggle = true",
                 'keyboard = "exclusive"',
                 'footer = "Enter to open · Esc to cancel"',
+                "",
+                "[back]",
+                'show = "never"',
                 "",
                 "[[items]]",
                 'type = "list"',
@@ -122,10 +164,14 @@ class SpotBackend(MenuBackend):
             [
                 'title = "Apps by Category"',
                 'anchor = "top"',
+                "margin_top = 120",
                 "width = 580",
                 "toggle = true",
                 'keyboard = "exclusive"',
                 'footer = "Enter to expand/launch · Esc to cancel"',
+                "",
+                "[back]",
+                'show = "never"',
                 "",
                 "[[items]]",
                 'type = "list"',
@@ -144,11 +190,13 @@ class SpotBackend(MenuBackend):
             ]
         )
 
-    def _build_launcher_toml(self) -> str:
+    def _build_quick_toml(self) -> str:
+        """Spot v0.7.0 run-bar style instant category/app search (default source + hide_empty)."""
         return "\n".join(
             [
                 'title = ""',
                 'anchor = "top"',
+                "margin_top = 160",
                 "width = 640",
                 "toggle = true",
                 'keyboard = "exclusive"',
@@ -156,10 +204,46 @@ class SpotBackend(MenuBackend):
                 "[opacity]",
                 "outside = 100",
                 "",
+                "[back]",
+                'show = "never"',
+                "",
                 "[[items]]",
                 'type = "apps"',
                 'id = "app"',
-                'placeholder = "Search apps… (@cat, =calc, .files, >run)"',
+                'placeholder = "Search categorized apps…"',
+                "hide_empty = true",
+                "",
+                "[[sources]]",
+                'name = "categories"',
+                "default = true",
+                'icon = "applications-other"',
+                "min_chars = 1",
+                f"exec = {_toml_str(f'{self.catty_cmd} spot-query {{query}}')}",
+                f"activate = {_toml_str(f'{self.catty_cmd} spot-launch {{value}}')}",
+                "",
+            ]
+        )
+
+    def _build_launcher_toml(self) -> str:
+        return "\n".join(
+            [
+                'title = ""',
+                'anchor = "top"',
+                "margin_top = 120",
+                "width = 640",
+                "toggle = true",
+                'keyboard = "exclusive"',
+                "",
+                "[opacity]",
+                "outside = 100",
+                "",
+                "[back]",
+                'show = "never"',
+                "",
+                "[[items]]",
+                'type = "apps"',
+                'id = "app"',
+                'placeholder = "Search apps…   # cat · = calc · . files · > run"',
                 "height = 360",
                 "",
                 "[apps]",
@@ -173,9 +257,9 @@ class SpotBackend(MenuBackend):
                 "",
                 "[[sources]]",
                 'name = "categories"',
-                'prefix = "@"',
+                'prefix = "#"',
                 'icon = "applications-other"',
-                "min_chars = 0",
+                "min_chars = 1",
                 f"exec = {_toml_str(f'{self.catty_cmd} spot-query {{query}}')}",
                 f"activate = {_toml_str(f'{self.catty_cmd} spot-launch {{value}}')}",
                 "",
@@ -202,6 +286,18 @@ class SpotBackend(MenuBackend):
                 "",
             ]
         )
+
+    def refresh_daemon(self) -> None:
+        """Ask a running spot daemon to exit once idle so updated .desktop files are rescanned."""
+        if not shutil.which("spot"):
+            return
+        try:
+            status = subprocess.run(["spot", "--status"], capture_output=True, check=False)
+            if status.returncode == 0:
+                subprocess.run(["spot", "--quit"], capture_output=True, check=False)
+                logger.info("Signaled spot daemon (--quit) to rescan .desktop entries on next launch")
+        except Exception as e:
+            logger.debug(f"Could not refresh spot daemon: {e}")
 
     def generate(
         self,
@@ -260,6 +356,9 @@ class SpotBackend(MenuBackend):
         (self.output_dir / "grouped.toml").write_text(
             self._build_grouped_toml(grouped_rows), encoding="utf-8"
         )
+        (self.output_dir / "quick.toml").write_text(
+            self._build_quick_toml(), encoding="utf-8"
+        )
         (self.output_dir / "launcher.toml").write_text(
             self._build_launcher_toml(), encoding="utf-8"
         )
@@ -274,6 +373,8 @@ class SpotBackend(MenuBackend):
             ),
             encoding="utf-8",
         )
+        if restart:
+            self.refresh_daemon()
         logger.info(f"Generated SpottyCat configs in {self.output_dir}")
         return True
 
@@ -281,6 +382,8 @@ class SpotBackend(MenuBackend):
         try:
             if self.output_dir.exists():
                 shutil.rmtree(self.output_dir)
+            if restart:
+                self.refresh_daemon()
             return True
         except Exception as e:
             logger.error(f"SpottyCat cleanup failed: {e}")

@@ -10,7 +10,7 @@ from typing import Dict, List
 
 from ..config import WALKER_CONFIG_PATH, WALKER_MENUS_DIR
 from ..parser import DesktopEntry
-from .base import MenuBackend, clean_exec, group_and_sort
+from .base import MenuBackend, ToolDep, clean_exec, group_and_sort
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,29 @@ class WalkerBackend(MenuBackend):
     """Generates Elephant TOML menu files and updates Walker config."""
 
     name = "walker"
+    dependencies = (
+        ToolDep(
+            binary="walker",
+            package="walker-bin",
+            url="https://github.com/abenz1267/walker",
+            required=True,
+            purpose="Walker application launcher",
+        ),
+        ToolDep(
+            binary="elephant",
+            package="elephant-bin",
+            url="https://github.com/abenz1267/elephant",
+            required=True,
+            purpose="Elephant menu/provider daemon for Walker",
+        ),
+        ToolDep(
+            binary="go",
+            package="go",
+            url="https://go.dev",
+            required=False,
+            purpose="builds gob_reader.go for Elephant usage history sorting",
+        ),
+    )
 
     def __init__(
         self,

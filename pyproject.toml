@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "catty"
-version = "1.0.0"
+version = "1.1.0"
 description = "Unified Linux app & game categorizer for Walker, Vicinae, and Spot"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,6 +12,13 @@ license = "MIT"
 dependencies = [
     "requests>=2.31.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Richieee-0006/catty"
+Spot = "https://github.com/KopyTKG/spot"
+Vicinae = "https://github.com/vicinaehq/vicinae"
+Walker = "https://github.com/abenz1267/walker"
+Elephant = "https://github.com/abenz1267/elephant"
 
 [project.optional-dependencies]
 dev = [
@@ -24,6 +31,11 @@ catty = "catty.main:main"
 catwalker = "catty.main:main_walker"
 vicicat = "catty.main:main_vicinae"
 spottycat = "catty.main:main_spot"
+
+[tool.catty.launcher-deps]
+spot = { required = ["spot-bin"], optional = ["libqalculate", "fd", "wl-clipboard", "glib2"], min_version = "0.7.0", url = "https://github.com/KopyTKG/spot" }
+vicinae = { required = ["vicinae-bin"], optional = [], url = "https://github.com/vicinaehq/vicinae" }
+walker = { required = ["walker-bin", "elephant-bin"], optional = ["go"], url = "https://github.com/abenz1267/walker" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,7 +1,8 @@
-"""Unit tests for Catty core and launcher backends."""
+"""Unit tests for Catty core, launcher backends, and dependency checks."""
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from catty.backends import get_backend
 from catty.backends.base import clean_exec, group_and_sort
@@ -9,6 +10,7 @@ from catty.backends.spot import SpotBackend
 from catty.backends.vicinae import VicinaeBackend
 from catty.backends.walker import WalkerBackend
 from catty.categorizer import AppCategorizer
+from catty.main import main as cli_main
 from catty.parser import DesktopEntry, DesktopFileParser
 from catty.writer import DesktopFileWriter
 
@@ -64,7 +66,6 @@ def test_writer_applies_and_rolls_back(tmp_path: Path) -> None:
     assert "Categories=Development;" in written
     assert len(writer.list_backups()) == 1
 
-    # Modify and verify rollback restores backed-up copy
     (user_dir / "demo.desktop").write_text("[Desktop Entry]\nName=Broken\n", encoding="utf-8")
     assert writer.rollback() is True
     assert "Name=Demo App" in (user_dir / "demo.desktop").read_text(encoding="utf-8")
@@ -88,7 +89,7 @@ def test_group_and_sort_dedups_and_orders_by_usage(tmp_path: Path) -> None:
     assert [e.filename for e in grouped["Browser"]] == ["firefox.desktop"]
 
 
-def test_spot_backend_generates_tomls_and_reads_frecency(tmp_path: Path) -> None:
+def test_spot_backend_v07_outputs_and_frecency(tmp_path: Path) -> None:
     apps_dir = tmp_path / "apps"
     apps_dir.mkdir()
     e1 = _make_entry(apps_dir, "alpha.desktop", "Alpha", exec_cmd="alpha %F", comment="First")
@@ -102,17 +103,26 @@ def test_spot_backend_generates_tomls_and_reads_frecency(tmp_path: Path) -> None
     assert backend.generate(
         {"alpha.desktop": "Utility", "beta.desktop": "Utility"},
         {"alpha.desktop": e1, "beta.desktop": e2},
+        restart=False,
     )
 
     assert (out_dir / "categories.toml").exists()
     assert (out_dir / "grouped.toml").exists()
-    assert (out_dir / "launcher.toml").exists()
+    quick_toml = (out_dir / "quick.toml").read_text(encoding="utf-8")
+    assert "hide_empty = true" in quick_toml
+    assert "default = true" in quick_toml
+    assert "margin_top = 160" in quick_toml
+
+    launcher_toml = (out_dir / "launcher.toml").read_text(encoding="utf-8")
+    assert 'prefix = "#"' in launcher_toml
+    assert 'show = "never"' in launcher_toml
+
     cat_toml = (out_dir / "cat_utility.toml").read_text(encoding="utf-8")
     assert 'options = ["Beta", "Alpha"]' in cat_toml
 
     rows = backend.query_rows("second")
     assert rows == ["Beta\tbeta\t[Utility] Second"]
-    assert backend.cleanup() is True
+    assert backend.cleanup(restart=False) is True
     assert not out_dir.exists()
 
 
@@ -155,6 +165,20 @@ def test_vicinae_backend_generates_extension_and_cleans_up(tmp_path: Path) -> No
     assert not ext_dir.exists()
     cleaned_cfg = json.loads(cfg.read_text(encoding="utf-8"))
     assert cleaned_cfg["favorites"] == ["existing:item"]
+
+
+def test_backend_dependencies_and_cli_deps() -> None:
+    with patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}" if name == "spot" else None):
+        spot_req, spot_opt = SpotBackend().check_dependencies()
+        assert spot_req == []
+        assert len(spot_opt) >= 1
+
+        walker_req, _ = WalkerBackend().check_dependencies()
+        assert {d.binary for d in walker_req} == {"walker", "elephant"}
+
+        assert cli_main(argv=["deps", "--target", "spot"]) == 0
+        assert cli_main(argv=["deps", "--target", "walker"]) == 1
+        assert cli_main(argv=["menus", "--target", "walker"]) == 1
 
 
 def test_clean_exec_and_get_backend() -> None:
