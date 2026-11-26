@@ -82,6 +82,21 @@ class SpotBackend(MenuBackend):
     def _slug(self, category: str) -> str:
         return category.lower().replace(" ", "_")
 
+    def _style_lines(self) -> List[str]:
+        if (self.output_dir.parent / "spot.css").exists():
+            return ['style = "../spot.css"']
+        return []
+
+    def _launch_templates(self) -> tuple[str, str]:
+        cmd = "uwsm-app -- {exec}" if os.environ.get("UWSM_FINALIZE_VARNAMES") and shutil.which("uwsm-app") else "{exec}"
+        if shutil.which("xdg-terminal-exec"):
+            term = "xdg-terminal-exec {exec}"
+        elif shutil.which("kitty"):
+            term = "kitty -e {exec}"
+        else:
+            term = "xdg-terminal-exec {exec}"
+        return cmd, term
+
     def get_usage_data(self) -> Dict[str, Dict]:
         """Read Spot frecency store ($XDG_STATE_HOME/spot/frecency.json)."""
         usage: Dict[str, Dict] = {}
@@ -108,6 +123,7 @@ class SpotBackend(MenuBackend):
                 'anchor = "top"',
                 "margin_top = 120",
                 "width = 560",
+                *self._style_lines(),
                 'keyboard = "exclusive"',
                 'footer = "Enter to launch · Backspace/Esc to return"',
                 "",
@@ -135,6 +151,7 @@ class SpotBackend(MenuBackend):
                 'anchor = "top"',
                 "margin_top = 120",
                 "width = 480",
+                *self._style_lines(),
                 "toggle = true",
                 'keyboard = "exclusive"',
                 'footer = "Enter to open · Esc to cancel"',
@@ -166,6 +183,7 @@ class SpotBackend(MenuBackend):
                 'anchor = "top"',
                 "margin_top = 120",
                 "width = 580",
+                *self._style_lines(),
                 "toggle = true",
                 'keyboard = "exclusive"',
                 'footer = "Enter to expand/launch · Esc to cancel"',
@@ -198,6 +216,7 @@ class SpotBackend(MenuBackend):
                 'anchor = "top"',
                 "margin_top = 160",
                 "width = 640",
+                *self._style_lines(),
                 "toggle = true",
                 'keyboard = "exclusive"',
                 "",
@@ -225,12 +244,14 @@ class SpotBackend(MenuBackend):
         )
 
     def _build_launcher_toml(self) -> str:
+        launch_cmd, terminal_cmd = self._launch_templates()
         return "\n".join(
             [
                 'title = ""',
                 'anchor = "top"',
                 "margin_top = 120",
                 "width = 640",
+                *self._style_lines(),
                 "toggle = true",
                 'keyboard = "exclusive"',
                 "",
@@ -252,8 +273,8 @@ class SpotBackend(MenuBackend):
                 "frecency = true",
                 "",
                 "[apps.launch]",
-                'command = "uwsm-app -- {exec}"',
-                'terminal = "xdg-terminal-exec {exec}"',
+                f"command = {_toml_str(launch_cmd)}",
+                f"terminal = {_toml_str(terminal_cmd)}",
                 "",
                 "[[sources]]",
                 'name = "categories"',
@@ -430,9 +451,14 @@ class SpotBackend(MenuBackend):
         exec_cmd = record.get("exec", "")
         if not exec_cmd:
             return 1
-        if record.get("terminal") and shutil.which("xdg-terminal-exec"):
-            cmd = f"xdg-terminal-exec {exec_cmd}"
-        elif shutil.which("uwsm-app"):
+        if record.get("terminal"):
+            if shutil.which("xdg-terminal-exec"):
+                cmd = f"xdg-terminal-exec {exec_cmd}"
+            elif shutil.which("kitty"):
+                cmd = f"kitty -e {exec_cmd}"
+            else:
+                cmd = exec_cmd
+        elif os.environ.get("UWSM_FINALIZE_VARNAMES") and shutil.which("uwsm-app"):
             cmd = f"uwsm-app -- {exec_cmd}"
         else:
             cmd = exec_cmd

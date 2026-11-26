@@ -99,6 +99,7 @@ def test_spot_backend_v07_outputs_and_frecency(tmp_path: Path) -> None:
     frecency.write_text(json.dumps({"beta": {"count": 5, "last": 1700000000}}), encoding="utf-8")
 
     out_dir = tmp_path / "spot_catty"
+    (tmp_path / "spot.css").write_text(".spot-window { background: transparent; }\n", encoding="utf-8")
     backend = SpotBackend(output_dir=out_dir, frecency_path=frecency)
     assert backend.generate(
         {"alpha.desktop": "Utility", "beta.desktop": "Utility"},
@@ -107,7 +108,8 @@ def test_spot_backend_v07_outputs_and_frecency(tmp_path: Path) -> None:
     )
 
     assert (out_dir / "categories.toml").exists()
-    assert (out_dir / "grouped.toml").exists()
+    grouped_toml = (out_dir / "grouped.toml").read_text(encoding="utf-8")
+    assert 'style = "../spot.css"' in grouped_toml
     quick_toml = (out_dir / "quick.toml").read_text(encoding="utf-8")
     assert "hide_empty = true" in quick_toml
     assert "default = true" in quick_toml
