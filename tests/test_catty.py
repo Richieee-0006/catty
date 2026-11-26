@@ -110,6 +110,7 @@ def test_spot_backend_v07_outputs_and_frecency(tmp_path: Path) -> None:
     assert (out_dir / "categories.toml").exists()
     grouped_toml = (out_dir / "grouped.toml").read_text(encoding="utf-8")
     assert 'style = "../spot.css"' in grouped_toml
+    assert 'show = "auto"' in grouped_toml
     quick_toml = (out_dir / "quick.toml").read_text(encoding="utf-8")
     assert "hide_empty = true" in quick_toml
     assert "default = true" in quick_toml
