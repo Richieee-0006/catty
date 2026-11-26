@@ -189,7 +189,7 @@ class SpotBackend(MenuBackend):
                 'footer = "Enter to expand/launch · Esc to cancel"',
                 "",
                 "[back]",
-                'show = "never"',
+                'show = "auto"',
                 "",
                 "[[items]]",
                 'type = "list"',
