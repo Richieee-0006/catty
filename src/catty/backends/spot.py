@@ -6,6 +6,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -309,10 +310,45 @@ class SpotBackend(MenuBackend):
         )
 
     def refresh_daemon(self) -> None:
-        """Ask a running spot daemon to exit once idle so updated .desktop files are rescanned."""
+        """Restart spot.service under systemd when managed, else signal spot --quit."""
         if not shutil.which("spot"):
             return
         try:
+            if shutil.which("systemctl"):
+                active = subprocess.run(
+                    ["systemctl", "--user", "is-active", "--quiet", "spot.service"],
+                    capture_output=True,
+                    check=False,
+                )
+                if active.returncode == 0:
+                    res = subprocess.run(
+                        ["systemctl", "--user", "restart", "spot.service"],
+                        capture_output=True,
+                        check=False,
+                    )
+                    if res.returncode == 0:
+                        logger.info("Restarted spot.service to rescan .desktop entries")
+                        return
+                else:
+                    enabled = subprocess.run(
+                        ["systemctl", "--user", "is-enabled", "--quiet", "spot.service"],
+                        capture_output=True,
+                        check=False,
+                    )
+                    if enabled.returncode == 0:
+                        status = subprocess.run(["spot", "--status"], capture_output=True, check=False)
+                        if status.returncode == 0:
+                            subprocess.run(["spot", "--quit"], capture_output=True, check=False)
+                            time.sleep(0.2)
+                        res = subprocess.run(
+                            ["systemctl", "--user", "start", "spot.service"],
+                            capture_output=True,
+                            check=False,
+                        )
+                        if res.returncode == 0:
+                            logger.info("Started spot.service to rescan .desktop entries")
+                            return
+
             status = subprocess.run(["spot", "--status"], capture_output=True, check=False)
             if status.returncode == 0:
                 subprocess.run(["spot", "--quit"], capture_output=True, check=False)
