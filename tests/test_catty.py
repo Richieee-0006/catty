@@ -239,3 +239,16 @@ def test_clean_exec_and_get_backend() -> None:
     assert get_backend("spot").name == "spot"
     assert get_backend("vicinae").name == "vicinae"
     assert get_backend("walker").name == "walker"
+
+
+def test_spot_submit_exec_uses_env_vars() -> None:
+    import tomllib
+
+    backend = SpotBackend()
+    cat_doc = tomllib.loads(backend._build_cat_toml("Development", ["Code"]))
+    cats_doc = tomllib.loads(backend._build_categories_toml(["Development  (1)"]))
+    grouped_doc = tomllib.loads(backend._build_grouped_toml(["Development\tCode"]))
+
+    assert cat_doc["submit"]["exec"] == 'catty spot-launch -- "$SPOT_VALUE_APP"'
+    assert cats_doc["submit"]["exec"] == 'catty spot-open -- "$SPOT_VALUE_CATEGORY"'
+    assert grouped_doc["submit"]["exec"] == 'catty spot-launch -- "$SPOT_VALUE_APP"'
