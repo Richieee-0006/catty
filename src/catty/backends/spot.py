@@ -117,7 +117,7 @@ class SpotBackend(MenuBackend):
 
     def _build_cat_toml(self, category: str, app_names: List[str]) -> str:
         options = ", ".join(_toml_str(name) for name in app_names)
-        cmd = f"{self.catty_cmd} spot-launch {{app}}"
+        cmd = f'{self.catty_cmd} spot-launch -- "$SPOT_VALUE_APP"'
         return "\n".join(
             [
                 f"title = {_toml_str(category)}",
@@ -145,7 +145,7 @@ class SpotBackend(MenuBackend):
 
     def _build_categories_toml(self, cat_labels: List[str]) -> str:
         options = ", ".join(_toml_str(lbl) for lbl in cat_labels)
-        cmd = f"{self.catty_cmd} spot-open {{category}}"
+        cmd = f'{self.catty_cmd} spot-open -- "$SPOT_VALUE_CATEGORY"'
         return "\n".join(
             [
                 'title = "Categories"',
@@ -177,7 +177,7 @@ class SpotBackend(MenuBackend):
 
     def _build_grouped_toml(self, grouped_rows: List[str]) -> str:
         options = ", ".join(_toml_str(row) for row in grouped_rows)
-        cmd = f"{self.catty_cmd} spot-launch {{app}}"
+        cmd = f'{self.catty_cmd} spot-launch -- "$SPOT_VALUE_APP"'
         return "\n".join(
             [
                 'title = "Apps by Category"',
